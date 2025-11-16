@@ -241,94 +241,77 @@ app.get("/leader/check/:product_id", async (req, res) => {
     const productId = req.params.product_id;
 
     try {
-        // ============================
-        // 1) Leer token local
-        // ============================
+        // 1) Leer token
         const tokenData = JSON.parse(fs.readFileSync("tokens.json"));
         const accessToken = tokenData.access_token;
 
-        // ============================
         // 2) Pedir competidores reales del catálogo
-        // ============================
         const r = await axios.get(
             `https://api.mercadolibre.com/products/${productId}/items`,
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`
-                }
-            }
+            { headers: { Authorization: `Bearer ${accessToken}` } }
         );
 
-        const competitors = r.data;
+        let competitors = r.data;
 
-        if (!competitors || competitors.length === 0) {
-            return res.json({ error: "No hay competidores para este producto." });
+        // ======================
+        // Normalizar formato
+        // ======================
+        let competitorsArray = [];
+
+        if (Array.isArray(competitors)) {
+            competitorsArray = competitors;
+
+        } else if (competitors && Array.isArray(competitors.results)) {
+            competitorsArray = competitors.results;
+
+        } else if (competitors && Array.isArray(competitors.items)) {
+            competitorsArray = competitors.items;
+
+        } else {
+            return res.status(400).json({
+                error: "Formato inesperado en la API",
+                data: competitors
+            });
         }
 
-        // ============================
+        if (competitorsArray.length === 0) {
+            return res.json({
+                error: "No hay competidores para este product_id"
+            });
+        }
+
         // 3) Ordenar por precio ascendente
-        // ============================
-    // Aseguramos que competitors sea un array
-    let competitorsArray = [];
-
-    // Si la API devuelve {competitors: [...]}
-    if (Array.isArray(competitors)) {
-        competitorsArray = competitors;
-    } else if (competitors && Array.isArray(competitors.competitors)) {
-        competitorsArray = competitors.competitors;
-    } else {
-        return res.status(400).send({
-            error: "La API no devolvió competidores válidos",
-            data: competitors
-        });
-    }
-
-    const cheapest = competitorsArray
-        .filter(c => c.price != null)
-        .sort((a, b) => a.price - b.price);
-
+        const ordered = competitorsArray
+            .filter(c => c.price != null)
+            .sort((a, b) => a.price - b.price);
 
         const leader = ordered[0];
 
-        // ============================
-        // 4) Leer archivo líder guardado
-        // ============================
+        // 4) Leer archivo de líderes previos
         let leaders = {};
-
         if (fs.existsSync("leaders.json")) {
             leaders = JSON.parse(fs.readFileSync("leaders.json"));
         }
 
         const previousLeader = leaders[productId];
 
-        // ============================
-        // 5) Detectar si cambió
-        // ============================
-        let changed = false;
+        // 5) Detectar cambio
+        const changed = previousLeader !== leader.id;
 
-        if (!previousLeader || previousLeader !== leader.id) {
-            changed = true;
-
-            // Guardar nuevo líder
+        if (changed) {
             leaders[productId] = leader.id;
-
-            fs.writeFileSync(
-                "leaders.json",
-                JSON.stringify(leaders, null, 2)
-            );
+            fs.writeFileSync("leaders.json", JSON.stringify(leaders, null, 2));
         }
 
-        // ============================
-        // 6) Preparar la respuesta
-        // ============================
+        // 6) Respuesta
         return res.json({
             changed,
             previous_leader: previousLeader || null,
             new_leader: leader.id,
-            top5: ordered.slice(0, 5).map(item => ({
-                id: item.id,
-                price: item.price,
-                title: item.title
+            top5: ordered.slice(0, 5).map(i => ({
+                id: i.id,
+                price: i.price,
+                title: i.title
             }))
         });
 
