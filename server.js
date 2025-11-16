@@ -167,3 +167,42 @@ app.get("/items", async (req, res) => {
         res.status(500).send("Error al obtener items");
     }
 });
+
+// ===============================================
+// OBTENER COMPETIDORES DE UN PRODUCTO DE CATALOGO
+// ===============================================
+app.get("/competitors/:item_id", async (req, res) => {
+    try {
+        const tokens = JSON.parse(fs.readFileSync("tokens.json"));
+        const { item_id } = req.params;
+
+        // 1) Obtener la publicación para conseguir el product_id
+        const itemInfo = await axios.get(`https://api.mercadolibre.com/items/${item_id}`, {
+            headers: {
+                Authorization: `Bearer ${tokens.access_token}`
+            }
+        });
+
+        const productId = itemInfo.data.product_id;
+
+        if (!productId) {
+            return res.send("❌ Este item NO pertenece a catálogo, no tiene competidores.");
+        }
+
+        // 2) Obtener los competidores desde catálogo
+        const competitors = await axios.get(`https://api.mercadolibre.com/products/${productId}/listings`, {
+            headers: {
+                Authorization: `Bearer ${tokens.access_token}`
+            }
+        });
+
+        res.send({
+            product_id: productId,
+            competitors: competitors.data
+        });
+
+    } catch (err) {
+        console.error(err.response?.data || err);
+        res.status(500).send("Error al obtener competidores");
+    }
+});
