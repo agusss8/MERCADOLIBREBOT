@@ -233,8 +233,6 @@ app.get("/competitors_by_product/:product_id", async (req, res) => {
   }
 });
 
-import fs from "fs";
-import axios from "axios";
 
 // ================================
 //  ⚡ LEADER CHECK
