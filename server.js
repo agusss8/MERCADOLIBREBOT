@@ -138,3 +138,32 @@ app.get("/me", async (req, res) => {
         res.status(500).send("Error al obtener info del usuario");
     }
 });
+
+// ================================
+// OBTENER PUBLICACIONES DEL USUARIO
+// ================================
+app.get("/items", async (req, res) => {
+    try {
+        const tokens = JSON.parse(fs.readFileSync("tokens.json"));
+
+        const user = await axios.get("https://api.mercadolibre.com/users/me", {
+            headers: {
+                Authorization: `Bearer ${tokens.access_token}`
+            }
+        });
+
+        const userId = user.data.id;
+
+        const listings = await axios.get(`https://api.mercadolibre.com/users/${userId}/items/search`, {
+            headers: {
+                Authorization: `Bearer ${tokens.access_token}`
+            }
+        });
+
+        res.send(listings.data);
+
+    } catch (err) {
+        console.error(err.response?.data || err);
+        res.status(500).send("Error al obtener items");
+    }
+});
