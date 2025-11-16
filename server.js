@@ -241,78 +241,80 @@ app.get("/leader/check/:product_id", async (req, res) => {
     const productId = req.params.product_id;
 
     try {
-        // 1) Leer token
         const tokenData = JSON.parse(fs.readFileSync("tokens.json"));
         const accessToken = tokenData.access_token;
 
-        // 2) Pedir competidores reales del catálogo
+        // 1 — PEDIR COMPETIDORES DEL PRODUCTO DE CATALOGO
         const r = await axios.get(
             `https://api.mercadolibre.com/products/${productId}/items`,
-            { headers: { Authorization: `Bearer ${accessToken}` } }
+            {
+                headers: { Authorization: `Bearer ${accessToken}` }
+            }
         );
 
-        let competitors = r.data;
+        const data = r.data;
 
-        // ======================
-        // Normalizar formato
-        // ======================
-        let competitorsArray = [];
+        // Normalizamos los competidores
+        let competitors = [];
 
-        if (Array.isArray(competitors)) {
-            competitorsArray = competitors;
-
-        } else if (competitors && Array.isArray(competitors.results)) {
-            competitorsArray = competitors.results;
-
-        } else if (competitors && Array.isArray(competitors.items)) {
-            competitorsArray = competitors.items;
-
+        if (Array.isArray(data)) {
+            competitors = data;
+        } else if (Array.isArray(data.results)) {
+            competitors = data.results;
+        } else if (Array.isArray(data.items)) {
+            competitors = data.items;
         } else {
             return res.status(400).json({
-                error: "Formato inesperado en la API",
-                data: competitors
+                error: "Formato desconocido de competidores",
+                raw: data
             });
         }
 
-        if (competitorsArray.length === 0) {
-            return res.json({
-                error: "No hay competidores para este product_id"
-            });
+        if (competitors.length === 0) {
+            return res.json({ error: "No hay competidores" });
         }
 
-        // 3) Ordenar por precio ascendente
-        const ordered = competitorsArray
-            .filter(c => c.price != null)
+        // 2 — Normalizar atributos
+        const normalized = competitors.map(c => ({
+            id: c.id || c.item_id,
+            title: c.title || c.item_title || "",
+            price: c.price || c.sale_price || c.listing_price || null
+        }));
+
+        // 3 — Filtrar y ordenar
+        const cheapest = normalized
+            .filter(x => x.price !== null)
             .sort((a, b) => a.price - b.price);
 
-        const leader = ordered[0];
+        if (cheapest.length === 0) {
+            return res.json({ error: "No hay precios válidos" });
+        }
 
-        // 4) Leer archivo de líderes previos
+        const leader = cheapest[0];
+
+        // 4 — Leer líder previo
         let leaders = {};
         if (fs.existsSync("leaders.json")) {
             leaders = JSON.parse(fs.readFileSync("leaders.json"));
         }
 
-        const previousLeader = leaders[productId];
+        const previous = leaders[productId];
 
-        // 5) Detectar cambio
-        const changed = previousLeader !== leader.id;
+        // 5 — Detectar cambio
+        const changed = previous !== leader.id;
 
         if (changed) {
             leaders[productId] = leader.id;
             fs.writeFileSync("leaders.json", JSON.stringify(leaders, null, 2));
         }
 
-        // 6) Respuesta
+        // 6 — Respuesta
         return res.json({
             changed,
-            previous_leader: previousLeader || null,
+            previous_leader: previous || null,
             new_leader: leader.id,
-            top5: ordered.slice(0, 5).map(i => ({
-                id: i.id,
-                price: i.price,
-                title: i.title
-            }))
+            leader_price: leader.price,
+            top5: cheapest.slice(0, 5)
         });
 
     } catch (error) {
