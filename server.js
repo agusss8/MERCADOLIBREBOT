@@ -117,3 +117,24 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log("Servidor activo en puerto " + PORT);
 });
+
+// ================================
+// VER DATOS DEL USUARIO (PRUEBA)
+// ================================
+app.get("/me", async (req, res) => {
+    try {
+        const tokens = JSON.parse(fs.readFileSync("tokens.json"));
+
+        const r = await axios.get("https://api.mercadolibre.com/users/me", {
+            headers: {
+                Authorization: `Bearer ${tokens.access_token}`
+            }
+        });
+
+        res.send(r.data);
+
+    } catch (err) {
+        console.error(err.response?.data || err);
+        res.status(500).send("Error al obtener info del usuario");
+    }
+});
