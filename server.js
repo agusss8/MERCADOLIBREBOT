@@ -275,11 +275,29 @@ app.get("/leader/check/:product_id", async (req, res) => {
         }
 
         // 2 — Normalizar atributos
-        const normalized = competitors.map(c => ({
-            id: c.id || c.item_id,
-            title: c.title || c.item_title || "",
-            price: c.price || c.sale_price || c.listing_price || null
-        }));
+    const normalized = [];
+
+    for (const c of competitors) {
+        const id = c.id || c.item_id;
+
+        // Precio directo
+        const price = c.price || c.sale_price || c.listing_price || null;
+
+        let title = c.title || c.item_title || null;
+
+        // Si la API NO devolvió título → lo pedimos al endpoint de items
+        if (!title) {
+            try {
+                const info = await axios.get(`https://api.mercadolibre.com/items/${id}`);
+                title = info.data.title || "";
+            } catch (err) {
+                title = "";
+            }
+        }
+
+        normalized.push({ id, title, price });
+    }
+
 
         // 3 — Filtrar y ordenar
         const cheapest = normalized
