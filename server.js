@@ -206,3 +206,29 @@ app.get("/competitors/:item_id", async (req, res) => {
         res.status(500).send("Error al obtener competidores");
     }
 });
+
+// ===============================================
+// OBTENER COMPETIDORES DADO UN product_id de catálogo
+// ===============================================
+app.get("/competitors_by_product/:product_id", async (req, res) => {
+  try {
+    const tokens = JSON.parse(fs.readFileSync("tokens.json"));
+    const { product_id } = req.params;
+
+    // Uso del endpoint de Mercado Libre para ver las publicaciones de catálogo que compiten
+    const resp = await axios.get(`https://api.mercadolibre.com/products/${product_id}/items`, {
+      headers: {
+        Authorization: `Bearer ${tokens.access_token}`
+      }
+    });
+
+    res.send({
+      product_id,
+      listings: resp.data.results || resp.data
+    });
+
+  } catch (err) {
+    console.error(err.response?.data || err);
+    res.status(500).send("Error al obtener competidores por product_id");
+  }
+});
