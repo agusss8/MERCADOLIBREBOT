@@ -232,3 +232,94 @@ app.get("/competitors_by_product/:product_id", async (req, res) => {
     res.status(500).send("Error al obtener competidores por product_id");
   }
 });
+
+import fs from "fs";
+import axios from "axios";
+
+// ================================
+//  ⚡ LEADER CHECK
+// ================================
+app.get("/leader/check/:product_id", async (req, res) => {
+    const productId = req.params.product_id;
+
+    try {
+        // ============================
+        // 1) Leer token local
+        // ============================
+        const tokenData = JSON.parse(fs.readFileSync("tokens.json"));
+        const accessToken = tokenData.access_token;
+
+        // ============================
+        // 2) Pedir competidores reales del catálogo
+        // ============================
+        const r = await axios.get(
+            `https://api.mercadolibre.com/products/${productId}/items`,
+            {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`
+                }
+            }
+        );
+
+        const competitors = r.data;
+
+        if (!competitors || competitors.length === 0) {
+            return res.json({ error: "No hay competidores para este producto." });
+        }
+
+        // ============================
+        // 3) Ordenar por precio ascendente
+        // ============================
+        const ordered = competitors
+            .filter(x => x.price != null)
+            .sort((a, b) => a.price - b.price);
+
+        const leader = ordered[0];
+
+        // ============================
+        // 4) Leer archivo líder guardado
+        // ============================
+        let leaders = {};
+
+        if (fs.existsSync("leaders.json")) {
+            leaders = JSON.parse(fs.readFileSync("leaders.json"));
+        }
+
+        const previousLeader = leaders[productId];
+
+        // ============================
+        // 5) Detectar si cambió
+        // ============================
+        let changed = false;
+
+        if (!previousLeader || previousLeader !== leader.id) {
+            changed = true;
+
+            // Guardar nuevo líder
+            leaders[productId] = leader.id;
+
+            fs.writeFileSync(
+                "leaders.json",
+                JSON.stringify(leaders, null, 2)
+            );
+        }
+
+        // ============================
+        // 6) Preparar la respuesta
+        // ============================
+        return res.json({
+            changed,
+            previous_leader: previousLeader || null,
+            new_leader: leader.id,
+            top5: ordered.slice(0, 5).map(item => ({
+                id: item.id,
+                price: item.price,
+                title: item.title
+            }))
+        });
+
+    } catch (error) {
+        console.error(error.response?.data || error);
+        return res.status(500).json({ error: "Error interno" });
+    }
+});
