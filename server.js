@@ -268,9 +268,25 @@ app.get("/leader/check/:product_id", async (req, res) => {
         // ============================
         // 3) Ordenar por precio ascendente
         // ============================
-        const ordered = competitors
-            .filter(x => x.price != null)
-            .sort((a, b) => a.price - b.price);
+    // Aseguramos que competitors sea un array
+    let competitorsArray = [];
+
+    // Si la API devuelve {competitors: [...]}
+    if (Array.isArray(competitors)) {
+        competitorsArray = competitors;
+    } else if (competitors && Array.isArray(competitors.competitors)) {
+        competitorsArray = competitors.competitors;
+    } else {
+        return res.status(400).send({
+            error: "La API no devolvió competidores válidos",
+            data: competitors
+        });
+    }
+
+    const cheapest = competitorsArray
+        .filter(c => c.price != null)
+        .sort((a, b) => a.price - b.price);
+
 
         const leader = ordered[0];
 
