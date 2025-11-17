@@ -1,0 +1,7 @@
+# Excluye el archivo de variables de entorno
+.env
+
+# (Otras exclusiones comunes en Node.js)
+node_modules/
+dist/
+*.log
