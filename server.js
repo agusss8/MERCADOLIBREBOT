@@ -177,7 +177,7 @@ async function chequearCatalogoYNotificar() {
                              `${top5Text}\n` + 
                              `Producto ID: ${ITEM_ID_A_MONITOREAR}`;
 
-        await enviarMensajeWhatsapp(finalMessage);
+        await enviarMensajeTelegram(finalMessage);
         
 
     } catch (error) {
@@ -190,43 +190,61 @@ async function chequearCatalogoYNotificar() {
 // Asegúrate de que dotenv esté importado al inicio del archivo
 // const TELEFONO_WHATSAPP = process.env.TELEFONO_WHATSAPP; // Ya está definido arriba
 
-// ================================
-// LÓGICA DE ENVÍO DE WHATSAPP CON CALLMEBOT
-// ================================
+// Asegúrate de que dotenv esté cargado al inicio (dotenv.config())
+// ...
+
+// =======================================================
+// LÓGICA DE ENVÍO DE NOTIFICACIONES A TELEGRAM
+// =======================================================
 
 /**
- * Envía un mensaje a través de la API de CallMeBot.
+ * Envía un mensaje usando la API de Telegram.
  * @param {string} message - El mensaje formateado a enviar.
  */
-async function enviarMensajeWhatsapp(message) {
-    const BOT_KEY = process.env.CALLMEBOT_API_KEY;
-    const PHONE = process.env.TELEFONO_WHATSAPP;
+async function enviarMensajeTelegram(message) {
+    const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+    const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
     
-    // Si falta la clave o el teléfono, no podemos enviar el mensaje.
-    if (!BOT_KEY || !PHONE) {
-        console.error("❌ ERROR: Falta CALLMEBOT_API_KEY o TELEFONO_WHATSAPP en .env");
+    if (!BOT_TOKEN || !CHAT_ID) {
+        console.error("❌ ERROR: Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en .env");
         return;
     }
 
-    // La URL de CallMeBot usa 'text' y el mensaje debe estar codificado para URL
-    const encodedMessage = encodeURIComponent(message);
-    
-    // Estructura de la URL de CallMeBot:
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${PHONE}&text=${encodedMessage}&apikey=${BOT_KEY}`;
+    // La API de Telegram soporta Markdown, lo cual es ideal para formatear el mensaje.
+    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
 
     try {
-        const response = await axios.get(url);
+        const response = await axios.post(url, {
+            chat_id: CHAT_ID,
+            text: message,
+            parse_mode: 'Markdown' // Permite usar **negritas** y otros formatos.
+        });
 
-        if (response.status === 200 && response.data.includes("send")) {
-            console.log(`✅ Notificación de WhatsApp enviada OK a ${PHONE} vía CallMeBot.`);
+        if (response.data.ok) {
+            console.log(`✅ Notificación de Telegram enviada OK al chat ${CHAT_ID}.`);
         } else {
-            // Manejar posibles errores devueltos por CallMeBot
-            console.error(`⚠️ Error al enviar WhatsApp (CallMeBot):`, response.data);
+            console.error(`⚠️ Error al enviar Telegram:`, response.data);
         }
     } catch (error) {
-        console.error("❌ Error de conexión al API de CallMeBot:", error.message);
+        console.error("❌ Error de conexión al API de Telegram:", error.message);
+        if (error.response?.data) {
+             console.error("Detalle del error:", error.response.data);
+        }
     }
 }
+
+// =======================================================
+// 🤖 AJUSTE EN LA FUNCIÓN PRINCIPAL
+// =======================================================
+
+// DEBES CAMBIAR LA LLAMADA DENTRO de chequearCatalogoYNotificar:
+/*
+// Línea anterior:
+await enviarMensajeWhatsapp(finalMessage);
+
+// Línea nueva:
+await enviarMensajeTelegram(finalMessage);
+*/
 
 
 // =====================================================
