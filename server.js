@@ -13,8 +13,12 @@ app.use(express.json());
 const APP_ID = process.env.APP_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
-const ITEM_ID_A_MONITOREAR = process.env.ITEM_ID_A_MONITOREAR; // ¡IMPORTANTE! Reemplaza con el ID de tu publicación.
-const TELEFONO_WHATSAPP = process.env.TELEFONO_WHATSAPP; // Número para la notificación (formato internacional)
+
+// La variable que realmente usaremos para el monitoreo de /price_to_win
+const MY_ITEM_ID = process.env.MY_ITEM_ID; 
+
+// Nota: TELEFONO_WHATSAPP ya no se usa, pero se puede mantener si planeas usarlo
+// const TELEFONO_WHATSAPP = process.env.TELEFONO_WHATSAPP;
 
 // --- AUTENTICACIÓN MELI (Omitida para brevedad, asumo que las rutas /auth y /callback funcionan) ---
 // ... (Tus funciones /auth, /callback, y refreshToken se mantienen intactas) ...
@@ -134,16 +138,30 @@ async function obtenerNombreVendedor(userId, accessToken) {
     }
 }
 
-// ... (Tus imports y la configuración inicial de Express, dotenv, etc. se mantienen) ...
+// --- Nuevas Variables necesarias ---
+// Asegúrate de que estas variables estén definidas al inicio de tu script:
+// const MY_ITEM_ID = process.env.MY_ITEM_ID;
+// const APP_ID = process.env.APP_ID;
+// const CLIENT_SECRET = process.env.CLIENT_SECRET;
+// const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+// const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 // =====================================================
-// 🤖 FUNCIÓN PRINCIPAL: CHEQUEAR, COMPARAR Y NOTIFICAR (Modificada)
+// 🤖 FUNCIÓN PRINCIPAL: CHEQUEAR MI ESTADO Y NOTIFICAR
 // =====================================================
 
 async function chequearCatalogoYNotificar() {
-    console.log(`\n--- Chequeo de catálogo (${ITEM_ID_A_MONITOREAR}) ---`);
+    // Definimos el ID del sitio (Argentina)
+    const SITE_ID = 'MLA'; 
+    const MY_ITEM_ID = process.env.MY_ITEM_ID; // Debe venir de tu .env
+
+    console.log(`\n--- Chequeo de estado de competencia para ${MY_ITEM_ID} ---`);
     if (!fs.existsSync("tokens.json")) {
         console.log("⚠️ No hay token de acceso. Ejecute /auth primero.");
+        return;
+    }
+    if (!MY_ITEM_ID) {
+        console.error("❌ ERROR: Falta MY_ITEM_ID en .env. Por favor, configúralo.");
         return;
     }
 
@@ -151,100 +169,84 @@ async function chequearCatalogoYNotificar() {
         const tokenData = JSON.parse(fs.readFileSync("tokens.json"));
         const accessToken = tokenData.access_token;
 
-        // 1. Obtener competidores y datos del producto
-        const r = await axios.get(
-            `https://api.mercadolibre.com/products/${ITEM_ID_A_MONITOREAR}/items`,
-            { headers: { Authorization: `Bearer ${accessToken}` } }
-        );
-
-        const items = r.data.results || r.data.items || [];
-        if (items.length === 0) {
-            console.log("No se encontraron competidores o publicaciones asociadas.");
-            return;
-        }
-
-        // 2. Normalizar y obtener el ID del vendedor y el precio
-        const competidoresRaw = items.map(item => ({
-            seller_id: item.seller_id,
-            price: item.price
-        }));
-
-        // 3. Ordenar por precio ascendente
-        const cheapest = competidoresRaw
-            .filter(c => c.price !== null && c.seller_id)
-            .sort((a, b) => a.price - b.price);
-
-        if (cheapest.length === 0) {
-            console.log("No hay precios válidos o vendedores en la competencia.");
-            return;
-        }
-
-        const currentLeader = cheapest[0];
+        // 1. Llamar a la API /price_to_win para OBTENER MI ESTADO
+        const url = `https://api.mercadolibre.com/items/${MY_ITEM_ID}/price_to_win?siteId=${SITE_ID}&version=v2`;
         
-        // 4. Detección de cambio de líder (mantener esta lógica)
-        let leaders = {};
-        if (fs.existsSync("leaders.json")) {
-            leaders = JSON.parse(fs.readFileSync("leaders.json"));
-        }
-
-        const previousLeaderId = leaders[ITEM_ID_A_MONITOREAR];
-        const leaderChanged = previousLeaderId !== currentLeader.seller_id;
-        
-        let headerMessage = "";
-        
-        // Si hay cambio, actualizamos el estado y preparamos el mensaje de alerta.
-        if (leaderChanged) {
-            leaders[ITEM_ID_A_MONITOREAR] = currentLeader.seller_id;
-            fs.writeFileSync("leaders.json", JSON.stringify(leaders, null, 2));
-            
-            const previousLeaderName = previousLeaderId ? await obtenerNombreVendedor(previousLeaderId, accessToken) : 'NADIE';
-            const currentLeaderName = await obtenerNombreVendedor(currentLeader.seller_id, accessToken);
-            
-            headerMessage = `🚨 **¡ALERTA DE CAMBIO DE LÍDER!** 🚨\n` +
-                            `El nuevo líder es: **${currentLeaderName}** a $${currentLeader.price.toLocaleString('es-AR')}\n` +
-                            `Líder anterior: ${previousLeaderName}\n`;
-            
-            console.log(`✅ ¡Líder cambiado! Nuevo líder: ${currentLeaderName}`);
-        } else {
-            // Si no hay cambio, preparamos un mensaje de estado rutinario.
-            const leaderName = await obtenerNombreVendedor(currentLeader.seller_id, accessToken);
-            headerMessage = `🤖 **Reporte Rutinario (5 min)**\n` +
-                            `Líder sin cambios: **${leaderName}** a $${currentLeader.price.toLocaleString('es-AR')}\n`;
-            
-            console.log(`Líder sin cambios. Actual líder: ${leaderName}`);
-        }
-        
-        // 5. Preparar Top 5 (Siempre se calcula para incluirlo en el reporte)
-        const top5Promises = cheapest.slice(0, 5).map(async (c, index) => {
-            const name = await obtenerNombreVendedor(c.seller_id, accessToken);
-            return `${index + 1}. **${name}** ($${c.price.toLocaleString('es-AR')})`;
+        const response = await axios.get(url, { 
+            headers: { Authorization: `Bearer ${accessToken}` } 
         });
 
-        const top5NamesAndPrices = await Promise.all(top5Promises);
-        const top5Text = top5NamesAndPrices.join('\n');
-
-        // 6. Construir el mensaje FINAL y ENVIAR INCONDICIONALMENTE
-        const finalMessage = `${headerMessage}\n` +
-                             `--- TOP 5 COMPETIDORES ---\n` +
-                             `${top5Text}\n` + 
-                             `Producto ID: ${ITEM_ID_A_MONITOREAR}`;
-
-        await enviarMensajeTelegram(finalMessage);
+        const statusData = response.data;
+        const myStatus = statusData.status; // winning, losing, sharing first, listed
+        const currentPrice = statusData.current_price;
+        const winningPrice = statusData.price_to_win;
         
+        let headerMessage = "";
+        let shouldNotify = false;
+        
+        // --- 2. Lógica de Detección de Cambio de Estado ---
+        // Usaremos un archivo auxiliar para detectar si el estado cambió a 'losing'
+        let previousStatus = {};
+        if (fs.existsSync("status.json")) {
+            previousStatus = JSON.parse(fs.readFileSync("status.json"));
+        }
+        
+        const previousMyStatus = previousStatus[MY_ITEM_ID];
+        const statusChanged = previousMyStatus !== myStatus;
+
+        // 3. Preparación del mensaje y alerta
+
+        if (myStatus === 'winning' || myStatus === 'sharing first') {
+            // No notificar (solo reporte rutinario)
+            shouldNotify = false; // Puedes cambiar esto a 'true' si quieres un reporte cada 5 min SÍ o SÍ
+            
+            headerMessage = `🟢 **Estatus de Competencia** ${statusChanged ? ' (CAMBIÓ)' : ''}\n` +
+                            `Tu estado: **${myStatus.toUpperCase()}** ${myStatus === 'winning' ? '🏆' : '🤝'}\n` +
+                            `Tu precio: $${currentPrice.toLocaleString('es-AR')}`;
+                            
+            if (statusChanged && previousMyStatus && previousMyStatus !== 'winning' && previousMyStatus !== 'sharing first') {
+                 // Si el cambio es para MEJORAR, enviamos una confirmación.
+                 shouldNotify = true;
+                 headerMessage = `✅ **¡RECUPERASTE EL LIDERAZGO!** ✅\n` + headerMessage;
+            }
+
+        } else if (myStatus === 'losing' || myStatus === 'listed') {
+            // ¡ALERTA! Estamos perdiendo o listados
+            shouldNotify = statusChanged; // Solo notificar si el estado CAMBIÓ a perder.
+
+            const priceDifference = winningPrice - currentPrice;
+            
+            headerMessage = `🚨 **¡ALERTA DE PÉRDIDA DE LIDERAZGO!** 🚨\n\n` +
+                            `Estado anterior: ${previousMyStatus ? previousMyStatus.toUpperCase() : 'N/A'}\n` +
+                            `Estado actual: **${myStatus.toUpperCase()}** 📉\n\n` +
+                            `Tu precio: $${currentPrice.toLocaleString('es-AR')}\n` +
+                            `**Precio objetivo para ganar:** $${winningPrice.toLocaleString('es-AR')} \n` +
+                            `👉 Diferencia: $${Math.abs(priceDifference).toLocaleString('es-AR')}`;
+            
+            if (myStatus === 'listed') {
+                headerMessage += "\n\n**¡IMPORTANTE!** Tu publicación está listada, pero no es apta para competir por atributos faltantes o baja reputación.";
+            }
+        }
+        
+        // 4. Actualizar el archivo de estado *después* de determinar la notificación
+        previousStatus[MY_ITEM_ID] = myStatus;
+        fs.writeFileSync("status.json", JSON.stringify(previousStatus, null, 2));
+
+        // 5. Enviar la notificación si se cumplen las condiciones
+        if (shouldNotify) {
+            await enviarMensajeTelegram(headerMessage);
+            console.log(`📢 Notificación enviada. Nuevo estado: ${myStatus}`);
+        } else {
+             console.log(`▶️ Estado sin cambios significativos. Reporte de consola: ${myStatus}`);
+        }
 
     } catch (error) {
-        console.error("❌ Error en el chequeo de catálogo:", error.response?.data || error);
+        console.error("❌ Error en el chequeo de competencia:", error.response?.data || error.message);
+        if (error.response?.data) {
+             console.error("Detalle del error de Meli:", error.response.data);
+        }
     }
 }
-
-// ... (El scheduler que llama a chequearCatalogoYNotificar cada 5 minutos se mantiene igual) ...
-
-// Asegúrate de que dotenv esté importado al inicio del archivo
-// const TELEFONO_WHATSAPP = process.env.TELEFONO_WHATSAPP; // Ya está definido arriba
-
-// Asegúrate de que dotenv esté cargado al inicio (dotenv.config())
-// ...
-
 // =======================================================
 // LÓGICA DE ENVÍO DE NOTIFICACIONES A TELEGRAM
 // =======================================================
@@ -313,7 +315,7 @@ chequearCatalogoYNotificar();
 // --- RUTAS DE EJEMPLO Y STARTUP ---
 // ... (Tus rutas /auth, /callback, /me, /items se mantienen para fines de debug) ...
 app.get("/", (req, res) => {
-    res.send(`Bot Mercado Libre activo 🎉. Monitoreando ${ITEM_ID_A_MONITOREAR} cada 5 minutos.`);
+    res.send(`Bot Mercado Libre activo 🎉. Monitoreando ${MY_ITEM_ID} cada 5 minutos.`);
 });
 
 const PORT = process.env.PORT || 3000;
