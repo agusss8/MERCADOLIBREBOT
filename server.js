@@ -1,162 +1,249 @@
 import express from "express";
-import fetch from "node-fetch";
+import axios from "axios";
+import dotenv from "dotenv";
 import fs from "fs";
-import path from "path";
+
+dotenv.config();
 
 const app = express();
 app.use(express.json());
 
-// ------------------------
-// ARCHIVO DE LÍDERES
-// ------------------------
-const DATA_FILE = path.resolve("./leader_data.json");
+const APP_ID = process.env.APP_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const REDIRECT_URI = process.env.REDIRECT_URI;
 
-function loadLeader() {
-  if (!fs.existsSync(DATA_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-  } catch {
-    return {};
-  }
-}
+// ================================
+// AUTH LOGIN
+// ================================
+app.get("/auth", (req, res) => {
+    const mlAuthURL =
+        `https://auth.mercadolibre.com.ar/authorization?response_type=code` +
+        `&client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}`;
 
-function saveLeader(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-// ------------------------
-// ► TU API ORIGINAL DE MERCADO LIBRE
-// ------------------------
-app.get("/ml/item/:id", async (req, res) => {
-  const id = req.params.id;
-  try {
-    const r = await fetch(`https://api.mercadolibre.com/items/${id}`);
-    const data = await r.json();
-    return res.json(data);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Error obteniendo item" });
-  }
+    res.redirect(mlAuthURL);
 });
 
-app.get("/ml/search/:query", async (req, res) => {
-  const query = req.params.query;
-  try {
-    const r = await fetch(`https://api.mercadolibre.com/sites/MLA/search?q=${query}`);
-    const data = await r.json();
-    return res.json(data);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Error haciendo búsqueda" });
-  }
-});
+// ================================
+// CALLBACK — TOKENS
+// ================================
+app.get("/callback", async (req, res) => {
+    const { code } = req.query;
 
-// ------------------------
-// ► Funciones del BOT
-// ------------------------
-async function getCompetitors(productId) {
-  const url = `https://api.mercadolibre.com/products/${productId}/items`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if (!data || !Array.isArray(data.items)) return [];
-  return data.items;
-}
+    try {
+        const response = await axios.post(
+            `https://api.mercadolibre.com/oauth/token`,
+            {
+                grant_type: "authorization_code",
+                client_id: APP_ID,
+                client_secret: CLIENT_SECRET,
+                code: code,
+                redirect_uri: REDIRECT_URI
+            },
+            { headers: { "Content-Type": "application/json" } }
+        );
 
-async function getItemInfo(itemId) {
-  const url = `https://api.mercadolibre.com/items/${itemId}`;
-  const res = await fetch(url);
-  const info = await res.json();
+        const tokens = response.data;
 
-  return {
-    id: itemId,
-    title: info.title || "",
-    price: info.price || 0
-  };
-}
+        fs.writeFileSync("tokens.json", JSON.stringify({
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+            expires_in: tokens.expires_in,
+            created_at: Date.now()
+        }, null, 2));
 
-async function sendWhatsAppMessage(phone, apiKey, msg) {
-  const url =
-    `https://api.callmebot.com/whatsapp.php?phone=${phone}` +
-    `&text=${encodeURIComponent(msg)}&apikey=${apiKey}`;
-
-  try {
-    await fetch(url);
-    console.log("Mensaje enviado vía WhatsApp");
-  } catch (err) {
-    console.error("Error enviando WhatsApp:", err);
-  }
-}
-
-// ------------------------
-// ► Ruta principal del BOT
-// ------------------------
-app.get("/leader/check/:productId", async (req, res) => {
-  const productId = req.params.productId;
-
-  try {
-    const competitors = await getCompetitors(productId);
-
-    if (!competitors.length)
-      return res.json({ error: "No se encontraron competidores" });
-
-    const sorted = competitors.sort((a, b) => a.price - b.price);
-
-    const top5 = sorted.slice(0, 5);
-
-    let top5Full = [];
-    for (const item of top5) {
-      const info = await getItemInfo(item.item_id);
-      top5Full.push(info);
+        res.send(`<h1>Tokens guardados OK</h1>`);
+    } catch (error) {
+        console.error(error.response?.data || error);
+        res.status(500).send("Error al obtener token");
     }
-
-    const leader = top5Full[0];
-
-    const stored = loadLeader();
-    const previousLeader = stored[productId] || null;
-
-    let changed = false;
-
-    if (!previousLeader || previousLeader !== leader.id) {
-      changed = true;
-      stored[productId] = leader.id;
-      saveLeader(stored);
-
-      const PHONE = "5491127145086"; // tu número
-      const APIKEY = "8352737"; // tu API key
-
-      const msg =
-        `🔔 *NUEVO LÍDER DETECTADO*\n\n` +
-        `Producto catálogo: ${productId}\n` +
-        `Nuevo líder: ${leader.title}\n` +
-        `Precio: $${leader.price}\n\n` +
-        `TOP 5:\n` +
-        top5Full.map((c, i) => `${i + 1}. ${c.title} — $${c.price}`).join("\n");
-
-      await sendWhatsAppMessage(PHONE, APIKEY, msg);
-    }
-
-    return res.json({
-      changed,
-      previous_leader: previousLeader,
-      new_leader: leader.id,
-      leader_title: leader.title,
-      leader_price: leader.price,
-      top5: top5Full
-    });
-
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Error interno" });
-  }
 });
 
-// ------------------------
+// ================================
+// REFRESH TOKEN
+// ================================
+async function refreshToken() {
+    if (!fs.existsSync("tokens.json")) return;
+
+    const data = JSON.parse(fs.readFileSync("tokens.json"));
+    const expireTime = data.created_at + (data.expires_in * 1000);
+
+    if (Date.now() < expireTime) return;
+
+    const params = new URLSearchParams();
+    params.append("grant_type", "refresh_token");
+    params.append("client_id", APP_ID);
+    params.append("client_secret", CLIENT_SECRET);
+    params.append("refresh_token", data.refresh_token);
+
+    try {
+        const r = await axios.post("https://api.mercadolibre.com/oauth/token", params);
+
+        fs.writeFileSync("tokens.json", JSON.stringify({
+            access_token: r.data.access_token,
+            refresh_token: r.data.refresh_token,
+            expires_in: r.data.expires_in,
+            created_at: Date.now()
+        }, null, 2));
+
+        console.log("🔁 Token renovado");
+    } catch (error) {
+        console.error("❌ Error al renovar token:", error.response?.data || error);
+    }
+}
+setInterval(refreshToken, 5 * 60 * 1000);
+
+// ================================
+// HOME
+// ================================
 app.get("/", (req, res) => {
-  res.send("ML Leader Bot funcionando con tu API!");
+    res.send("Bot Mercado Libre activo 🎉");
 });
 
-// ------------------------
+// ================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Servidor funcionando en puerto " + PORT);
+    console.log("Servidor en puerto " + PORT);
+});
+
+// ================================
+// INFO USUARIO
+// ================================
+app.get("/me", async (req, res) => {
+    try {
+        const tokens = JSON.parse(fs.readFileSync("tokens.json"));
+        const r = await axios.get("https://api.mercadolibre.com/users/me", {
+            headers: { Authorization: `Bearer ${tokens.access_token}` }
+        });
+
+        res.send(r.data);
+    } catch (err) {
+        console.error(err.response?.data || err);
+        res.status(500).send("Error al obtener info del usuario");
+    }
+});
+
+// ================================
+// ITEMS DEL USUARIO
+// ================================
+app.get("/items", async (req, res) => {
+    try {
+        const tokens = JSON.parse(fs.readFileSync("tokens.json"));
+        const user = await axios.get("https://api.mercadolibre.com/users/me", {
+            headers: { Authorization: `Bearer ${tokens.access_token}` }
+        });
+
+        const listings = await axios.get(
+            `https://api.mercadolibre.com/users/${user.data.id}/items/search`,
+            { headers: { Authorization: `Bearer ${tokens.access_token}` } }
+        );
+
+        res.send(listings.data);
+    } catch (err) {
+        console.error(err.response?.data || err);
+        res.status(500).send("Error al obtener items");
+    }
+});
+
+// =====================================================
+// ⚡ LEADER CHECK — DETECTA CAMBIO DE LÍDER POR PRECIO
+// =====================================================
+app.get("/leader/check/:product_id", async (req, res) => {
+    const productId = req.params.product_id;
+
+    try {
+        const tokenData = JSON.parse(fs.readFileSync("tokens.json"));
+        const accessToken = tokenData.access_token;
+
+        // 1 — Obtener competidores del catálogo
+        const r = await axios.get(
+            `https://api.mercadolibre.com/products/${productId}/items`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+
+        const data = r.data;
+
+        // 2 — Normalizar formatos posibles
+        let competitors = [];
+
+        if (Array.isArray(data)) {
+            competitors = data;
+        } else if (Array.isArray(data.items)) {
+            competitors = data.items;
+        } else if (Array.isArray(data.results)) {
+            competitors = data.results;
+        } else {
+            return res.status(400).json({
+                error: "Formato desconocido de competidores",
+                raw: data
+            });
+        }
+
+        if (competitors.length === 0) {
+            return res.json({ error: "No hay competidores" });
+        }
+
+        // 3 — Normalizar campos (id, title, price)
+        const normalized = [];
+        for (const c of competitors) {
+            const id = c.id || c.item_id;
+
+            const price =
+                c.price ||
+                c.sale_price ||
+                c.listing_price ||
+                null;
+
+            let title = c.title || c.item_title || null;
+
+            if (!title) {
+                try {
+                    const info = await axios.get(`https://api.mercadolibre.com/items/${id}`);
+                    title = info.data.title || "";
+                } catch {
+                    title = "";
+                }
+            }
+
+            normalized.push({ id, title, price });
+        }
+
+        // 4 — Ordenar por precio ascendente
+        const cheapest = normalized
+            .filter(x => x.price !== null)
+            .sort((a, b) => a.price - b.price);
+
+        if (cheapest.length === 0) {
+            return res.json({ error: "No hay precios válidos" });
+        }
+
+        const leader = cheapest[0];
+
+        // 5 — Leer líder previo guardado
+        let leaders = {};
+        if (fs.existsSync("leaders.json")) {
+            leaders = JSON.parse(fs.readFileSync("leaders.json"));
+        }
+
+        const previous = leaders[productId];
+
+        const changed = previous !== leader.id;
+
+        if (changed) {
+            leaders[productId] = leader.id;
+            fs.writeFileSync("leaders.json", JSON.stringify(leaders, null, 2));
+        }
+
+        // 6 — Respuesta final
+        return res.json({
+            changed,
+            previous_leader: previous || null,
+            new_leader: leader.id,
+            leader_price: leader.price,
+            top5: cheapest.slice(0, 5)
+        });
+
+    } catch (error) {
+        console.error(error.response?.data || error);
+        return res.status(500).json({ error: "Error interno" });
+    }
 });
