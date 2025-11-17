@@ -13,8 +13,8 @@ app.use(express.json());
 const APP_ID = process.env.APP_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
-const ITEM_ID_A_MONITOREAR = process.env.ITEM_ID_A_MONITOREAR || "MLA123456789"; // ¡IMPORTANTE! Reemplaza con el ID de tu publicación.
-const TELEFONO_WHATSAPP = process.env.TELEFONO_WHATSAPP || "54911xxxxxxxx"; // Número para la notificación (formato internacional)
+const ITEM_ID_A_MONITOREAR = process.env.ITEM_ID_A_MONITOREAR; // ¡IMPORTANTE! Reemplaza con el ID de tu publicación.
+const TELEFONO_WHATSAPP = process.env.TELEFONO_WHATSAPP; // Número para la notificación (formato internacional)
 
 // --- AUTENTICACIÓN MELI (Omitida para brevedad, asumo que las rutas /auth y /callback funcionan) ---
 // ... (Tus funciones /auth, /callback, y refreshToken se mantienen intactas) ...
