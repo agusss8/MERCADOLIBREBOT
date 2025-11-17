@@ -6,11 +6,11 @@ import path from "path";
 const app = express();
 app.use(express.json());
 
+// ------------------------
+// ARCHIVO DE LÍDERES
+// ------------------------
 const DATA_FILE = path.resolve("./leader_data.json");
 
-// ------------------------
-// 🔹 Función para leer/guardar el líder anterior
-// ------------------------
 function loadLeader() {
   if (!fs.existsSync(DATA_FILE)) return {};
   try {
@@ -25,22 +25,43 @@ function saveLeader(data) {
 }
 
 // ------------------------
-// 🔹 Obtener competidores de un producto de Catálogo ML
+// ► TU API ORIGINAL DE MERCADO LIBRE
+// ------------------------
+app.get("/ml/item/:id", async (req, res) => {
+  const id = req.params.id;
+  try {
+    const r = await fetch(`https://api.mercadolibre.com/items/${id}`);
+    const data = await r.json();
+    return res.json(data);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Error obteniendo item" });
+  }
+});
+
+app.get("/ml/search/:query", async (req, res) => {
+  const query = req.params.query;
+  try {
+    const r = await fetch(`https://api.mercadolibre.com/sites/MLA/search?q=${query}`);
+    const data = await r.json();
+    return res.json(data);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Error haciendo búsqueda" });
+  }
+});
+
+// ------------------------
+// ► Funciones del BOT
 // ------------------------
 async function getCompetitors(productId) {
   const url = `https://api.mercadolibre.com/products/${productId}/items`;
-
   const res = await fetch(url);
   const data = await res.json();
-
   if (!data || !Array.isArray(data.items)) return [];
-
   return data.items;
 }
 
-// ------------------------
-// 🔹 Obtener info de un ítem (para sacar título y precio correcto)
-// ------------------------
 async function getItemInfo(itemId) {
   const url = `https://api.mercadolibre.com/items/${itemId}`;
   const res = await fetch(url);
@@ -53,11 +74,10 @@ async function getItemInfo(itemId) {
   };
 }
 
-// ------------------------
-// 🔹 Función para enviar WhatsApp usando CallMeBot
-// ------------------------
 async function sendWhatsAppMessage(phone, apiKey, msg) {
-  const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encodeURIComponent(msg)}&apikey=${apiKey}`;
+  const url =
+    `https://api.callmebot.com/whatsapp.php?phone=${phone}` +
+    `&text=${encodeURIComponent(msg)}&apikey=${apiKey}`;
 
   try {
     await fetch(url);
@@ -68,7 +88,7 @@ async function sendWhatsAppMessage(phone, apiKey, msg) {
 }
 
 // ------------------------
-// 🔹 Ruta: ver si cambió el líder
+// ► Ruta principal del BOT
 // ------------------------
 app.get("/leader/check/:productId", async (req, res) => {
   const productId = req.params.productId;
@@ -77,27 +97,20 @@ app.get("/leader/check/:productId", async (req, res) => {
     const competitors = await getCompetitors(productId);
 
     if (!competitors.length)
-      return res.json({
-        error: "No se encontraron competidores"
-      });
+      return res.json({ error: "No se encontraron competidores" });
 
-    // Ordenar por precio ascendente
     const sorted = competitors.sort((a, b) => a.price - b.price);
 
-    // Top 5
-    let top5 = sorted.slice(0, 5);
+    const top5 = sorted.slice(0, 5);
 
-    // Obtener títulos reales
-    const top5Full = [];
+    let top5Full = [];
     for (const item of top5) {
       const info = await getItemInfo(item.item_id);
       top5Full.push(info);
     }
 
-    // El líder actual
     const leader = top5Full[0];
 
-    // Cargar líder previo
     const stored = loadLeader();
     const previousLeader = stored[productId] || null;
 
@@ -108,19 +121,16 @@ app.get("/leader/check/:productId", async (req, res) => {
       stored[productId] = leader.id;
       saveLeader(stored);
 
-      // Enviar WhatsApp — Configurá tu número y API key acá:
-      const PHONE = "5491127145086"; // ← reemplazar
-      const APIKEY = "8352737";    // ← reemplazar
+      const PHONE = "5491127145086"; // tu número
+      const APIKEY = "8352737"; // tu API key
 
       const msg =
         `🔔 *NUEVO LÍDER DETECTADO*\n\n` +
         `Producto catálogo: ${productId}\n` +
         `Nuevo líder: ${leader.title}\n` +
         `Precio: $${leader.price}\n\n` +
-        `TOP 5 actual:\n` +
-        top5Full
-          .map((c, i) => `${i + 1}. ${c.title} — $${c.price}`)
-          .join("\n");
+        `TOP 5:\n` +
+        top5Full.map((c, i) => `${i + 1}. ${c.title} — $${c.price}`).join("\n");
 
       await sendWhatsAppMessage(PHONE, APIKEY, msg);
     }
@@ -142,7 +152,7 @@ app.get("/leader/check/:productId", async (req, res) => {
 
 // ------------------------
 app.get("/", (req, res) => {
-  res.send("ML Leader Bot funcionando!");
+  res.send("ML Leader Bot funcionando con tu API!");
 });
 
 // ------------------------
