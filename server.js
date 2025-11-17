@@ -88,7 +88,11 @@ async function obtenerNombreVendedor(userId, accessToken) {
 // 🤖 FUNCIÓN PRINCIPAL: CHEQUEAR, COMPARAR Y NOTIFICAR (Modificada)
 // =====================================================
 
-// ... (Tus imports, configuración y funciones auxiliares como enviarMensajeTelegram, obtenerNombreVendedor se mantienen) ...
+// Asegúrate de que tus imports y variables de .env estén cargadas:
+// import axios from "axios";
+// import fs from "fs";
+// const ITEM_ID_A_MONITOREAR = process.env.ITEM_ID_A_MONITOREAR; 
+// ... (Funciones auxiliares obtenerNombreVendedor y enviarMensajeTelegram) ...
 
 async function chequearCatalogoYNotificar() {
     console.log(`\n--- Chequeo de ítem específico (${ITEM_ID_A_MONITOREAR}) ---`);
@@ -101,9 +105,8 @@ async function chequearCatalogoYNotificar() {
         const tokenData = JSON.parse(fs.readFileSync("tokens.json"));
         const accessToken = tokenData.access_token;
 
-        // 1. OBTENER COMPETIDORES DEL ÍTEM ESPECÍFICO (Endpoint corregido)
+        // 1. OBTENER COMPETIDORES DE LA PUBLICACIÓN ESPECÍFICA (Item Competition)
         const r = await axios.get(
-            // Usamos el endpoint que da el ranking para el ÍTEM/VARIANTE
             `https://api.mercadolibre.com/items/${ITEM_ID_A_MONITOREAR}/catalog_seller_competition`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
         );
@@ -118,14 +121,7 @@ async function chequearCatalogoYNotificar() {
         }
 
         // 2. Normalizar, obtener el ID del vendedor y el precio
-        // NOTA: El campo del ID del vendedor en esta API es 'seller_id' y el del precio es 'price'
-        const competidores = competidoresRaw.map(item => ({
-            seller_id: item.seller_id,
-            price: item.price
-        }));
-
-        // 3. Ordenar por precio ascendente
-        const cheapest = competidores
+        const cheapest = competidoresRaw
             .filter(c => c.price !== null && c.seller_id)
             .sort((a, b) => a.price - b.price);
 
@@ -136,7 +132,7 @@ async function chequearCatalogoYNotificar() {
 
         const currentLeader = cheapest[0];
         
-        // 4. Detección de cambio de líder (la lógica se mantiene)
+        // 3. Detección de cambio de líder y preparación de mensaje de cabecera
         let leaders = {};
         if (fs.existsSync("leaders.json")) {
             leaders = JSON.parse(fs.readFileSync("leaders.json"));
@@ -148,6 +144,7 @@ async function chequearCatalogoYNotificar() {
         let headerMessage = "";
         
         if (leaderChanged) {
+            // Actualizar estado y preparar alerta
             leaders[ITEM_ID_A_MONITOREAR] = currentLeader.seller_id;
             fs.writeFileSync("leaders.json", JSON.stringify(leaders, null, 2));
             
@@ -159,18 +156,17 @@ async function chequearCatalogoYNotificar() {
                             `El nuevo líder es: **${currentLeaderName}** a $${currentLeader.price.toLocaleString('es-AR')}\n` +
                             `Líder anterior: ${previousLeaderName}\n`;
             
-            console.log(`✅ ¡Líder cambiado! Nuevo líder: ${currentLeaderName}`);
         } else {
+            // Preparar reporte rutinario
             const leaderName = await obtenerNombreVendedor(currentLeader.seller_id, accessToken);
             headerMessage = `🤖 **Reporte Rutinario (5 min)**\n` +
                             `*ID Ítem: ${ITEM_ID_A_MONITOREAR}*\n` +
                             `Líder sin cambios: **${leaderName}** a $${currentLeader.price.toLocaleString('es-AR')}\n`;
-            
-            console.log(`Líder sin cambios. Actual líder: ${leaderName}`);
         }
         
-        // 5. Preparar Top 5 (Siempre se calcula)
+        // 4. Preparar Top 5 (Siempre se calcula y se obtienen los nombres)
         const top5Promises = cheapest.slice(0, 5).map(async (c, index) => {
+            // Obtener el nombre del vendedor (nickname)
             const name = await obtenerNombreVendedor(c.seller_id, accessToken);
             return `${index + 1}. **${name}** ($${c.price.toLocaleString('es-AR')})`;
         });
@@ -178,27 +174,20 @@ async function chequearCatalogoYNotificar() {
         const top5NamesAndPrices = await Promise.all(top5Promises);
         const top5Text = top5NamesAndPrices.join('\n');
 
-        // 6. Construir y enviar el mensaje FINAL
+        // 5. Construir y enviar el mensaje FINAL
         const finalMessage = `${headerMessage}\n` +
                              `--- TOP 5 COMPETIDORES ---\n` +
                              `${top5Text}`;
 
-        // ¡Usamos la función de Telegram que implementamos!
         await enviarMensajeTelegram(finalMessage); 
 
     } catch (error) {
-        console.error("❌ Error en el chequeo de catálogo (Ítem):", error.response?.data || error);
+        // Manejo de errores que pueden ser 403 Forbidden o 404 Not Found
+        console.error("❌ Error en el chequeo de catálogo (Ítem):", error.response?.data || error.message);
+        // Opcional: Enviar un error de Telegram si falla la llamada de MELI
+        // await enviarMensajeTelegram(`❌ Error grave monitoreando ${ITEM_ID_A_MONITOREAR}: ${error.message}`);
     }
 }
-
-// ... (El scheduler que llama a chequearCatalogoYNotificar cada 5 minutos se mantiene igual) ...
-
-// Asegúrate de que dotenv esté importado al inicio del archivo
-// const TELEFONO_WHATSAPP = process.env.TELEFONO_WHATSAPP; // Ya está definido arriba
-
-// Asegúrate de que dotenv esté cargado al inicio (dotenv.config())
-// ...
-
 // =======================================================
 // LÓGICA DE ENVÍO DE NOTIFICACIONES A TELEGRAM
 // =======================================================
