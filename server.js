@@ -82,8 +82,10 @@ async function obtenerNombreVendedor(userId, accessToken) {
     }
 }
 
+// ... (Tus imports y la configuración inicial de Express, dotenv, etc. se mantienen) ...
+
 // =====================================================
-// 🤖 FUNCIÓN PRINCIPAL: CHEQUEAR, COMPARAR Y NOTIFICAR
+// 🤖 FUNCIÓN PRINCIPAL: CHEQUEAR, COMPARAR Y NOTIFICAR (Modificada)
 // =====================================================
 
 async function chequearCatalogoYNotificar() {
@@ -97,22 +99,19 @@ async function chequearCatalogoYNotificar() {
         const tokenData = JSON.parse(fs.readFileSync("tokens.json"));
         const accessToken = tokenData.access_token;
 
-        // 1. Obtener competidores (Usamos el endpoint que devuelve la competencia, que incluye seller_id y price)
-        // NOTA: Para catálogo, el endpoint más común es /items/{item_id}/catalog_seller_competition
-        // Aquí usamos el que devuelve publicaciones asociadas al producto: /products/{id}/items
+        // 1. Obtener competidores y datos del producto
         const r = await axios.get(
             `https://api.mercadolibre.com/products/${ITEM_ID_A_MONITOREAR}/items`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
         );
 
         const items = r.data.results || r.data.items || [];
-
         if (items.length === 0) {
             console.log("No se encontraron competidores o publicaciones asociadas.");
             return;
         }
 
-        // 2. Normalizar, obtener el ID del vendedor y el precio
+        // 2. Normalizar y obtener el ID del vendedor y el precio
         const competidoresRaw = items.map(item => ({
             seller_id: item.seller_id,
             price: item.price
@@ -129,8 +128,8 @@ async function chequearCatalogoYNotificar() {
         }
 
         const currentLeader = cheapest[0];
-
-        // 4. Leer líder previo guardado
+        
+        // 4. Detección de cambio de líder (mantener esta lógica)
         let leaders = {};
         if (fs.existsSync("leaders.json")) {
             leaders = JSON.parse(fs.readFileSync("leaders.json"));
@@ -138,8 +137,32 @@ async function chequearCatalogoYNotificar() {
 
         const previousLeaderId = leaders[ITEM_ID_A_MONITOREAR];
         const leaderChanged = previousLeaderId !== currentLeader.seller_id;
-
-        // 5. Preparar Top 5 y obtener nombres (hacer esto ANTES de la notificación)
+        
+        let headerMessage = "";
+        
+        // Si hay cambio, actualizamos el estado y preparamos el mensaje de alerta.
+        if (leaderChanged) {
+            leaders[ITEM_ID_A_MONITOREAR] = currentLeader.seller_id;
+            fs.writeFileSync("leaders.json", JSON.stringify(leaders, null, 2));
+            
+            const previousLeaderName = previousLeaderId ? await obtenerNombreVendedor(previousLeaderId, accessToken) : 'NADIE';
+            const currentLeaderName = await obtenerNombreVendedor(currentLeader.seller_id, accessToken);
+            
+            headerMessage = `🚨 **¡ALERTA DE CAMBIO DE LÍDER!** 🚨\n` +
+                            `El nuevo líder es: **${currentLeaderName}** a $${currentLeader.price.toLocaleString('es-AR')}\n` +
+                            `Líder anterior: ${previousLeaderName}\n`;
+            
+            console.log(`✅ ¡Líder cambiado! Nuevo líder: ${currentLeaderName}`);
+        } else {
+            // Si no hay cambio, preparamos un mensaje de estado rutinario.
+            const leaderName = await obtenerNombreVendedor(currentLeader.seller_id, accessToken);
+            headerMessage = `🤖 **Reporte Rutinario (5 min)**\n` +
+                            `Líder sin cambios: **${leaderName}** a $${currentLeader.price.toLocaleString('es-AR')}\n`;
+            
+            console.log(`Líder sin cambios. Actual líder: ${leaderName}`);
+        }
+        
+        // 5. Preparar Top 5 (Siempre se calcula para incluirlo en el reporte)
         const top5Promises = cheapest.slice(0, 5).map(async (c, index) => {
             const name = await obtenerNombreVendedor(c.seller_id, accessToken);
             return `${index + 1}. **${name}** ($${c.price.toLocaleString('es-AR')})`;
@@ -148,37 +171,21 @@ async function chequearCatalogoYNotificar() {
         const top5NamesAndPrices = await Promise.all(top5Promises);
         const top5Text = top5NamesAndPrices.join('\n');
 
-        // 6. Si el líder cambió: Notificar y actualizar estado.
-        if (leaderChanged) {
-            const currentLeaderName = await obtenerNombreVendedor(currentLeader.seller_id, accessToken);
-            const previousLeaderName = previousLeaderId ? await obtenerNombreVendedor(previousLeaderId, accessToken) : 'NADIE';
+        // 6. Construir el mensaje FINAL y ENVIAR INCONDICIONALMENTE
+        const finalMessage = `${headerMessage}\n` +
+                             `--- TOP 5 COMPETIDORES ---\n` +
+                             `${top5Text}\n` + 
+                             `Producto ID: ${ITEM_ID_A_MONITOREAR}`;
 
-            // Actualizar el archivo de estado con el nuevo líder
-            leaders[ITEM_ID_A_MONITOREAR] = currentLeader.seller_id;
-            fs.writeFileSync("leaders.json", JSON.stringify(leaders, null, 2));
-
-            // --- LÓGICA DE NOTIFICACIÓN DE WHATSAPP (Asumiendo una función de envío) ---
-            const notificationMessage = `🚨 **¡CAMBIO DE LÍDER!** 🚨\n\n` +
-                                        `Producto: ${ITEM_ID_A_MONITOREAR}\n` +
-                                        `Líder anterior: **${previousLeaderName}**\n` +
-                                        `Nuevo Líder: **${currentLeaderName}** a **$${currentLeader.price.toLocaleString('es-AR')}**\n\n` +
-                                        `--- TOP 5 COMPETIDORES ---\n` +
-                                        `${top5Text}`;
-
-            await enviarMensajeWhatsapp(notificationMessage);
-            console.log(`✅ ¡Líder cambiado y notificado! Nuevo líder: ${currentLeaderName}`);
-
-        } else {
-            console.log(`Líder sin cambios. Actual líder: ${await obtenerNombreVendedor(currentLeader.seller_id, accessToken)}`);
-            // Opcional: Notificar el TOP 5 cada 5 minutos aunque no haya cambio.
-            // const updateMessage = `🤖 Monitoreo activo. Líder sin cambios.\n\n` + top5Text;
-            // await enviarMensajeWhatsapp(updateMessage);
-        }
+        await enviarMensajeWhatsapp(finalMessage);
+        
 
     } catch (error) {
         console.error("❌ Error en el chequeo de catálogo:", error.response?.data || error);
     }
 }
+
+// ... (El scheduler que llama a chequearCatalogoYNotificar cada 5 minutos se mantiene igual) ...
 
 // Asegúrate de que dotenv esté importado al inicio del archivo
 // const TELEFONO_WHATSAPP = process.env.TELEFONO_WHATSAPP; // Ya está definido arriba
