@@ -19,6 +19,58 @@ const TELEFONO_WHATSAPP = process.env.TELEFONO_WHATSAPP; // Número para la noti
 // --- AUTENTICACIÓN MELI (Omitida para brevedad, asumo que las rutas /auth y /callback funcionan) ---
 // ... (Tus funciones /auth, /callback, y refreshToken se mantienen intactas) ...
 
+// --- AUTENTICACIÓN MELI ---
+
+/**
+ * Redirige al usuario a la página de autorización de Mercado Libre.
+ */
+app.get("/auth", (req, res) => {
+    // Asegúrate de que APP_ID y REDIRECT_URI están definidos en tu .env
+    const url = `https://auth.mercadolibre.com/authorization?response_type=code&client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}`;
+    res.redirect(url);
+});
+
+/**
+ * Ruta de callback donde Meli redirige después de la autorización.
+ * Aquí se obtiene el 'code' para intercambiarlo por el access_token y refresh_token.
+ */
+app.get("/callback", async (req, res) => {
+    const code = req.query.code;
+
+    if (!code) {
+        return res.status(400).send("Falta el parámetro 'code' en la URL.");
+    }
+
+    // Preparar el cuerpo de la solicitud POST
+    const params = new URLSearchParams();
+    params.append("grant_type", "authorization_code");
+    params.append("client_id", APP_ID);
+    params.append("client_secret", CLIENT_SECRET);
+    params.append("code", code);
+    params.append("redirect_uri", REDIRECT_URI);
+
+    try {
+        const response = await axios.post(
+            "https://api.mercadolibre.com/oauth/token",
+            params,
+            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        );
+
+        // Guardar los tokens en el archivo
+        fs.writeFileSync("tokens.json", JSON.stringify({
+            access_token: response.data.access_token,
+            refresh_token: response.data.refresh_token,
+            expires_in: response.data.expires_in,
+            created_at: Date.now()
+        }, null, 2));
+
+        res.send("¡Autenticación exitosa! El token ha sido guardado y el monitoreo ha iniciado. Puedes cerrar esta ventana.");
+    } catch (error) {
+        console.error("❌ Error al obtener el token:", error.response?.data || error);
+        res.status(500).send("Error en la autenticación con Mercado Libre.");
+    }
+});
+
 // ================================
 // REFRESH TOKEN (Se mantiene tu lógica)
 // ================================
